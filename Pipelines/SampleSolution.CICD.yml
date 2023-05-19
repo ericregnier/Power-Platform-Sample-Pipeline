@@ -1,0 +1,162 @@
+name: $(Major).$(Minor).$(Revision).$(Build)
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+    - DataPackage/*
+    - Pipelines/*
+    - README.md
+    - Scripts/*
+
+pool:
+  name: default
+
+variables:
+    - name: BuildConfiguration
+      value: 'Release'
+    - name: BuildPlatform
+      value: 'Any CPU'
+    - name: CurrentDirectory
+      value: 'Sample.Dataverse'
+    - name: SolutionFolderName
+      value: 'SampleSolution\src'
+    - name: SolutionName
+      value: 'SampleSolution_managed.zip'
+    - name: SolutionSourceFolder
+      value: '$(CurrentDirectory)\$(SolutionFolderName)'
+    - name: DeploymentSettingsFolderName
+      value:  '$(CurrentDirectory)\SampleSolution\DeploymentSettings'
+    - name: Major
+      value: 1 #should always match the major in the plugins assembly version
+    - name: Minor
+      value: 1 #should always match the minor in the plugins assembly version
+    - name: Revision
+      value: 1
+    - name: Build
+      value: $[counter(format('{0}.{1}.{2}', variables['Major'], variables['Minor'], variables['Revision']), 0)]
+
+stages:
+- stage: GenerateSolutionArtifact
+  displayName: Generate Solution Artifact
+  jobs:
+  - job: GenerateSolution
+    steps:
+    - task: NuGetToolInstaller@1
+    
+    - task: NuGetCommand@2
+      inputs:
+        restoreSolution: '**/*.sln'
+    
+    - task: Update AssemblyInfo@1
+      inputs:
+        rootFolder: '$(Build.SourcesDirectory)'
+        filePattern: 'AssemblyInfo.cs'
+        assemblyVersion: '$(Major).$(Minor).$(Revision).$(Build)'
+        assemblyFileVersion: '$(Major).$(Minor).$(Revision).$(Build)'
+
+    - task: VSBuild@1
+      displayName: 'Build VS Solution'
+      inputs:
+        solution: '**/*.sln'
+        platform: '$(BuildPlatform)'
+        configuration: '$(BuildConfiguration)'
+
+    - template: Pipelines/set-solution-version.yml
+      parameters:
+        SolutionXmlPath: $(SolutionSourceFolder)\Other\Solution.xml
+        Major: $(Major)
+        Minor: $(Minor)
+        Revision: $(Revision)
+        Build: $(Build)
+
+    - template: Pipelines/copy-solution-artifacts.yml
+      parameters:
+        BuildConfiguration: 'Debug'
+        SolutionDirectory: $(CurrentDirectory)
+        SolutionFolderName: $(SolutionFolderName)
+        PluginsProjectName: 'Plugins'
+
+    - task: PowerPlatformToolInstaller@2
+      inputs:
+        DefaultVersion: true
+    
+    - task: PowerPlatformPackSolution@2
+      inputs:
+        SolutionSourceFolder: '$(SolutionSourceFolder)'
+        SolutionOutputFile: '$(SolutionName)'
+        SolutionType: 'Managed'
+        ProcessCanvasApps: true
+
+    - task: PowerPlatformChecker@2
+      inputs:
+        authenticationType: 'PowerPlatformSPN'
+        PowerPlatformSPN: 'DevEnvironment'
+        FilesToAnalyze: '$(SolutionName)'
+        RuleSet: '0ad12346-e108-40b8-a956-9a8f95ea18c9'
+        ArtifactDestinationName: 'SolutionCheckerLogs'
+
+    - task: PublishBuildArtifacts@1
+      displayName: Publish Solution Artifact
+      inputs:
+        PathtoPublish: '$(SolutionName)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+
+- stage: TestEnvironment
+  displayName: Deploy to Test
+  jobs:
+  - deployment: SolutionDeployment
+    environment: TestEnvironment
+    strategy:
+     runOnce: 
+      deploy:
+        steps:
+        - template: Pipelines/import-dataverse-solution.yml
+          parameters:
+            SolutionName: 'SampleSolution'
+            SolutionInputFile: '$(Pipeline.Workspace)/drop/$(SolutionName)'
+            Environment: 'TestEnvironment' #tried using '$(System.StageName) and $(Environment.Name)'
+            DeploymentSettingsFile: '$(DeploymentSettingsFolderName)/TestEnvironment.json'
+            OverwriteUnmanagedCustomizations: true
+            HoldingSolution: true
+        - template: Pipelines/get-azure-spn-credentials.yml
+          parameters:
+            AzureSubscription: 'Azure Tenant'
+        - template: Pipelines/get-dataverse-connectionstring.yml
+          parameters:
+            AzureSubscription: 'Azure Tenant'
+            DataverseUrl: 'https://TestEnvironment.crm6.dynamics.com'
+        - task: PowerShell@2
+          displayName: Running Run Post Deployment Tasks PS
+          inputs:
+            filePath: '$(CurrentDirectory)/Scripts/RunPostDeploymentTasks.ps1'
+            arguments: '-ConnectionString "$(DataverseConnectionString)" -WorkingDirectory "./$(CurrentDirectory)/Scripts"'
+
+- stage: ProdEnvironment
+  displayName: Deploy to Prod
+  jobs:
+  - deployment: SolutionDeployment
+    environment: ProdEnvironment
+    strategy:
+     runOnce: 
+      deploy:
+        steps:
+        - template: Pipelines/import-dataverse-solution.yml
+          parameters:
+            SolutionName: 'SampleSolution'
+            SolutionInputFile: '$(Pipeline.Workspace)/drop/$(SolutionName)'
+            Environment: 'ProdEnvironment'
+            DeploymentSettingsFile: '$(DeploymentSettingsFolderName)/ProdEnvironment.json'
+            OverwriteUnmanagedCustomizations: true
+            HoldingSolution: true
+        - template: Pipelines/get-dataverse-connectionstring.yml
+          parameters:
+            AzureSubscription: 'Azure Tenant'
+            DataverseUrl: 'https://prodenvironment.crm6.dynamics.com'
+        - task: PowerShell@2
+          inputs:
+            filePath: '../Scripts/RunPostDeploymentTasks.ps1'
+            arguments: '-ConnectionString "$(DataverseConnectionString)" -AdminEmailAddress "admin@domain.com"'

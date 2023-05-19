@@ -1,0 +1,6 @@
+{
+  "TenantId": "<tenant ID>",
+  "DataverseConnectionString": "AuthType=ClientSecret;ClientId={0};ClientSecret={1};Url={2};LoginPrompt=Never",
+  "EnvironmentUrl": "https://ericregnier.crm6.dynamics.com",
+  "SolutionUnpackFolders": "SampleSolution"
+}
