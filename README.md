@@ -3,6 +3,7 @@ Power Platform Sample Project and Azure DevOps Pipeline for Dataverse CI/CD
 Sample repo for:
 - All Dataverse related components (eg Plugins) and solutions
 - Master/reference data used by the solution and scripts to promote that data to upstreams envs
+- Scripts to get the target state of processes (workflows, flows and business rules) and set them in the target envs
 
 ## Dataverse Solutions
 | Name | Description | Notes |
